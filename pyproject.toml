@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "fastapi-ipex-serving"
+version = "0.1.0"
+description = "Serving with FastAPI and IPEX"
+authors = ["Jiayu Liu <jiayu@hey.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.111.1"
+pydantic = "^2.8.2"
+pydantic-settings = "^2.3.4"
+transformers = "^4.42.4"
+uvicorn = { extras = ["standard"], version = "^0.30.3" }
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.5.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+serve = "fastapi_ipex_serving.main:app"
