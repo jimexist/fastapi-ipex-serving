@@ -22,8 +22,8 @@ from transformers import (
 
 
 class ServerSetting(BaseSettings):
-    cpu_max_workers: int = 8
-    rate_limit_per_second: int = 64
+    cpu_max_workers: int = 4
+    rate_limit_per_second: int = 16
     mp_context: Literal["spawn", "fork"] = "spawn"
     dtype: Literal["bfloat16", "fp16", "float32"] = "bfloat16"
 
@@ -87,7 +87,7 @@ def create_process_pool(settings: ServerSetting) -> ProcessPoolExecutor:
 async def lifespan(app: FastAPI):
     global_ctx["process_pool"] = create_process_pool(settings=server_settings)
     global_ctx["rate_limit"] = AsyncLimiter(
-        10 * server_settings.rate_limit_per_second, 10
+        4 * server_settings.rate_limit_per_second, 4
     )
     yield
     process_pool: ProcessPoolExecutor = global_ctx["process_pool"]
