@@ -1,12 +1,15 @@
 import asyncio
 import logging
 import multiprocessing
+import sys
+import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Literal
 
 import intel_extension_for_pytorch as ipex
 import torch
+from aiolimiter import AsyncLimiter
 from fastapi import FastAPI
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
@@ -19,9 +22,13 @@ from transformers import (
 
 
 class ServerSetting(BaseSettings):
-    max_workers: int = 4
+    cpu_max_workers: int = 8
+    rate_limit_per_second: int = 64
     mp_context: Literal["spawn", "fork"] = "spawn"
     dtype: Literal["bfloat16", "fp16", "float32"] = "bfloat16"
+
+    class Config:
+        env_prefix = "SERVER_"
 
 
 class PredictRequest(BaseModel):
@@ -35,9 +42,12 @@ global_ctx = {}
 
 
 def handle_request(request: PredictRequest, truncation: bool = True):
+    start = time.perf_counter()
     global classification_pipe
     with torch.no_grad(), torch.cpu.amp.autocast():
-        return classification_pipe(request.inputs, truncation=truncation)
+        result = classification_pipe(request.inputs, truncation=truncation)
+    elapsed = time.perf_counter() - start
+    return result, elapsed
 
 
 def init_model(settings: ServerSetting):
@@ -57,9 +67,6 @@ def init_model(settings: ServerSetting):
     else:
         raise ValueError(f"Unsupported dtype: {settings.dtype}")
     model = ipex.optimize(model, dtype=model_dtype)
-    logging.info(
-        f"Model '{model_name}' loaded and optimized with {settings.dtype} dtype"
-    )
 
     global classification_pipe
     classification_pipe = pipeline(
@@ -69,7 +76,7 @@ def init_model(settings: ServerSetting):
 
 def create_process_pool(settings: ServerSetting) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
-        max_workers=settings.max_workers,
+        max_workers=settings.cpu_max_workers,
         mp_context=multiprocessing.get_context(settings.mp_context),
         initializer=init_model,
         initargs=(settings,),
@@ -79,6 +86,9 @@ def create_process_pool(settings: ServerSetting) -> ProcessPoolExecutor:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global_ctx["process_pool"] = create_process_pool(settings=server_settings)
+    global_ctx["rate_limit"] = AsyncLimiter(
+        10 * server_settings.rate_limit_per_second, 10
+    )
     yield
     process_pool: ProcessPoolExecutor = global_ctx["process_pool"]
     process_pool.shutdown()
@@ -86,7 +96,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler(sys.stdout)
+log_formatter = logging.Formatter(
+    "%(asctime)s [%(processName)s: %(process)d] [%(threadName)s: %(thread)d] [%(levelname)s] %(name)s: %(message)s"
+)
+stream_handler.setFormatter(log_formatter)
+logger.addHandler(stream_handler)
 
 
 @app.get("/health")
@@ -94,8 +112,22 @@ async def health():
     return {"ok": True}
 
 
+@app.get("/info")
+async def info():
+    return {
+        "cpu_max_workers": server_settings.cpu_max_workers,
+        "rate_limit_per_second": server_settings.rate_limit_per_second,
+        "mp_context": server_settings.mp_context,
+        "dtype": server_settings.dtype,
+    }
+
+
 @app.post("/predict")
 async def predict(req: PredictRequest):
+    rate_limit: AsyncLimiter = global_ctx["rate_limit"]
     process_pool: ProcessPoolExecutor = global_ctx["process_pool"]
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(process_pool, handle_request, req)
+    async with rate_limit:
+        loop = asyncio.get_running_loop()
+        result, elapsed = await loop.run_in_executor(process_pool, handle_request, req)
+        logger.info(f"Model inference time: {elapsed:.3f}s")
+        return result
