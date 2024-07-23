@@ -19,7 +19,6 @@ from transformers import (
 
 
 class ServerSetting(BaseSettings):
-    model_name_or_path: str | None
     mp_context: Literal["spawn", "fork"] = "spawn"
     dtype: Literal["bfloat16", "fp16", "float32"] = "bfloat16"
 
@@ -41,7 +40,7 @@ def handle_request(request: PredictRequest, truncation: bool = True):
 
 
 def init_model(settings: ServerSetting):
-    model_name = settings.model_name_or_path or "/repository"
+    model_name = "/repository"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model: PreTrainedModel = AutoModelForSequenceClassification.from_pretrained(
         model_name
