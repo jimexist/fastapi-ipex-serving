@@ -19,6 +19,7 @@ from transformers import (
 
 
 class ServerSetting(BaseSettings):
+    max_workers: int = 4
     mp_context: Literal["spawn", "fork"] = "spawn"
     dtype: Literal["bfloat16", "fp16", "float32"] = "bfloat16"
 
